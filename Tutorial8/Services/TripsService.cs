@@ -1,4 +1,5 @@
-﻿using Microsoft.Data.SqlClient;
+﻿
+using Microsoft.Data.SqlClient;
 using Tutorial8.Models.DTOs;
 
 namespace Tutorial8.Services;
@@ -135,6 +136,18 @@ public class TripsService : ITripsService
             if (exists != null)
                 throw new Exception("Client with this email already exists.");
         }
+        
+        // Validate email
+        if (!clientDto.Email.Contains('@'))
+        {
+            throw new Exception("Invalid email format.");
+        }
+        
+        // Validate pesel
+        if (string.IsNullOrEmpty(clientDto.Pesel) || clientDto.Pesel.Length != 11 || !clientDto.Pesel.All(char.IsDigit))
+        {
+            throw new Exception("Invalid PESEL format.");
+        }
 
         // Add new client
         await using (var insertCmd = new SqlCommand(insertClientQuery, conn))
@@ -180,7 +193,6 @@ public class TripsService : ITripsService
                 return (false, 404, "Trip not found");
             }
         }
-            
 
         // Check if client already registered for this trip
         await using (var cmd = new SqlCommand("SELECT 1 FROM Client_Trip WHERE IdClient = @ClientId AND IdTrip = @TripId", conn))
