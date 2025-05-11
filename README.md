@@ -1,5 +1,5 @@
 Example REST API implementation.  
-Connecting to local DB on docker port 1433.  
+Connects to local DB on docker port 1433.  
 
 GET /api/trips  
 GET /api/clients/{id}/trips  
