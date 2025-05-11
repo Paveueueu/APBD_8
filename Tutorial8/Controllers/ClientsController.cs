@@ -21,10 +21,17 @@ public class ClientsController : ControllerBase
     [HttpGet("{clientId}/trips")]
     public async Task<IActionResult> GetTripsForClient(int clientId)
     {
-        var result = await _tripsService.GetTripsForClient(clientId);
-        if (result == null)
-            return NotFound($"Client no. {clientId} not found");
-        return Ok(result);
+        try
+        {
+            var result = await _tripsService.GetTripsForClient(clientId);
+            if (result == null)
+                return NotFound($"Client with id {clientId} not found");
+            return Ok(result);
+        }
+        catch
+        {
+            return StatusCode(500);
+        }
     }
     
     /// <summary>
@@ -44,12 +51,15 @@ public class ClientsController : ControllerBase
         
         try
         {
-            var id = await _tripsService.CreateClient(clientDto);
-            return Created($"/api/clients/{id}", new { ClientId = id });
+            var result = await _tripsService.CreateClient(clientDto);
+            if (!result.Success)
+                return StatusCode(result.StatusCode, result.Message);
+                
+            return Created($"/api/clients/{result.Id}", new { ClientId = result.Id });
         }
-        catch (Exception ex)
+        catch
         {
-            return Conflict(ex.Message);
+            return StatusCode(500);
         }
     }
 
@@ -59,11 +69,18 @@ public class ClientsController : ControllerBase
     [HttpPut("{clientId}/trips/{tripId}")]
     public async Task<IActionResult>  RegisterClientForTrip(int clientId, int tripId)
     {
-        var result = await _tripsService.RegisterClientForTrip(clientId, tripId);
-        if (!result.Success)
-            return StatusCode(result.StatusCode, result.Message);
+        try
+        {
+            var result = await _tripsService.RegisterClientForTrip(clientId, tripId);
+            if (!result.Success)
+                return StatusCode(result.StatusCode, result.Message);
 
-        return Created($"/api/clients/{clientId}/trips/{tripId}", new { ClientId = clientId, TripId = tripId });
+            return Created($"/api/clients/{clientId}/trips/{tripId}", new { ClientId = clientId, TripId = tripId });
+        }
+        catch
+        {
+            return StatusCode(500);
+        }
     }
 
     /// <summary>
@@ -72,10 +89,17 @@ public class ClientsController : ControllerBase
     [HttpDelete("{clientId}/trips/{tripId}")]
     public async Task<IActionResult>  UnregisterClientFromTrip(int clientId, int tripId)
     {
-        var result = await _tripsService.UnregisterClientFromTrip(clientId, tripId);
-        if (!result.Success)
-            return StatusCode(result.StatusCode, result.Message);
+        try
+        {
+            var result = await _tripsService.UnregisterClientFromTrip(clientId, tripId);
+            if (!result.Success)
+                return StatusCode(result.StatusCode, result.Message);
 
-        return NoContent();
+            return NoContent();
+        }
+        catch
+        {
+            return StatusCode(500);
+        }
     }
 }

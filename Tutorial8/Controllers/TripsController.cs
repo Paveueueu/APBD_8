@@ -1,4 +1,3 @@
-using Tutorial8.Models;
 using Tutorial8.Services;
 using Microsoft.AspNetCore.Mvc;
 
@@ -21,7 +20,14 @@ public class TripsController : ControllerBase
     [HttpGet]
     public async Task<IActionResult> GetTripsWithDetails()
     {
-        var trips = await _tripsService.GetTripsWithDetails();
-        return Ok(trips);
+        try
+        {
+            var trips = await _tripsService.GetTripsWithDetails();
+            return Ok(trips);
+        }
+        catch
+        {
+            return StatusCode(500);
+        }
     }
 }

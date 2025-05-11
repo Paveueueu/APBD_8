@@ -57,8 +57,19 @@ public class TripsService : ITripsService
 
     public async Task<IEnumerable<ClientTripDto>?> GetTripsForClient(int clientId)
     {
-        // check if exists
+        await using var conn = new SqlConnection(_connectionString);
+        await conn.OpenAsync();
         
+        // check if client exists
+        await using (var checkCmd = new SqlCommand("SELECT 1 FROM Client WHERE IdClient = @clientId", conn))
+        {
+            checkCmd.Parameters.AddWithValue("@clientId", clientId);
+            var exists = await checkCmd.ExecuteScalarAsync();
+            if (exists == null)
+                return null;
+        }
+
+        // get all trips for the client
         const string sql = """
                            SELECT t.IdTrip, t.Name, t.Description, t.DateFrom, t.DateTo, t.MaxPeople, ct.RegisteredAt, ct.PaymentDate
                            FROM Client_Trip ct
@@ -66,14 +77,11 @@ public class TripsService : ITripsService
                            WHERE ct.IdClient = @clientId
                            """;
         
-        await using var conn = new SqlConnection(_connectionString);
+        var result = new List<ClientTripDto>();
         await using var cmd = new SqlCommand(sql, conn);
         cmd.Parameters.AddWithValue("@clientId", clientId);
-        await conn.OpenAsync();
-
-        // get all trips for the client
-        var result = new List<ClientTripDto>();
         await using var reader = await cmd.ExecuteReaderAsync();
+        
         while (await reader.ReadAsync())
         {
             result.Add(new ClientTripDto
@@ -92,14 +100,8 @@ public class TripsService : ITripsService
         return result;
     }
 
-    public async Task<int> CreateClient(ClientDto clientDto)
+    public async Task<(bool Success, int StatusCode, string Message, int? Id)> CreateClient(ClientDto clientDto)
     {
-        const string insertClientQuery = """
-                                         INSERT INTO Client (FirstName, LastName, Email, Telephone, Pesel)
-                                         OUTPUT INSERTED.IdClient
-                                         VALUES (@FirstName, @LastName, @Email, @Telephone, @Pesel)
-                                         """;
-
         await using var conn = new SqlConnection(_connectionString);
         await conn.OpenAsync();
 
@@ -109,31 +111,37 @@ public class TripsService : ITripsService
             checkCmd.Parameters.AddWithValue("@Email", clientDto.Email);
             var exists = await checkCmd.ExecuteScalarAsync();
             if (exists != null)
-                throw new Exception("Client with this email already exists.");
+                return (false, 409, "Client with this EMAIL already exists.", null);
         }
         
         // Check if pesel already exists
         await using (var checkCmd = new SqlCommand("SELECT 1 FROM Client WHERE Pesel = @Pesel", conn))
         {
-            checkCmd.Parameters.AddWithValue("@Pesel", clientDto.Email);
+            checkCmd.Parameters.AddWithValue("@Pesel", clientDto.Pesel);
             var exists = await checkCmd.ExecuteScalarAsync();
             if (exists != null)
-                throw new Exception("Client with this pesel already exists.");
+                return (false, 409, "Client with this PESEL already exists.", null);
         }
 
         // Validate email
         if (!clientDto.Email.Contains('@'))
         {
-            throw new Exception("Invalid email format.");
+            return (false, 400, "Invalid EMAIL format.", null);
         }
 
         // Validate pesel
         if (string.IsNullOrEmpty(clientDto.Pesel) || clientDto.Pesel.Length != 11 || !clientDto.Pesel.All(char.IsDigit))
         {
-            throw new Exception("Invalid PESEL format.");
+            return (false, 400, "Invalid PESEL format.", null);
         }
 
         // Add new client
+        const string insertClientQuery = """
+                                         INSERT INTO Client (FirstName, LastName, Email, Telephone, Pesel)
+                                         OUTPUT INSERTED.IdClient
+                                         VALUES (@FirstName, @LastName, @Email, @Telephone, @Pesel)
+                                         """;
+        
         await using (var insertCmd = new SqlCommand(insertClientQuery, conn))
         {
             insertCmd.Parameters.AddWithValue("@FirstName", clientDto.FirstName);
@@ -143,7 +151,7 @@ public class TripsService : ITripsService
             insertCmd.Parameters.AddWithValue("@Pesel", (object?)clientDto.Pesel ?? DBNull.Value);
 
             var newId = (int)(await insertCmd.ExecuteScalarAsync() ?? throw new InvalidOperationException());
-            return newId;
+            return (true, 201, "", newId);
         }
     }
 
@@ -158,8 +166,8 @@ public class TripsService : ITripsService
         {
             checkCmd.Parameters.AddWithValue("@IdClient", clientId);
             var exists = await checkCmd.ExecuteScalarAsync();
-            if (exists != null)
-                return (false, 404, "Client not found");
+            if (exists == null)
+                return (false, 404, "Client not found.");
         }
 
         // Check if trip exists
@@ -174,7 +182,7 @@ public class TripsService : ITripsService
             }
             else
             {
-                return (false, 404, "Trip not found");
+                return (false, 404, "Trip not found.");
             }
         }
 
@@ -185,7 +193,7 @@ public class TripsService : ITripsService
             cmd.Parameters.AddWithValue("@ClientId", clientId);
             cmd.Parameters.AddWithValue("@TripId", tripId);
             if (await cmd.ExecuteScalarAsync() != null)
-                return (false, 409, "Client already registered for this trip");
+                return (false, 409, "Client already registered for this trip.");
         }
 
         // Check if client doesn't exceed max number of participants
@@ -196,7 +204,7 @@ public class TripsService : ITripsService
 
             if (count >= maxPeople)
             {
-                return (false, 409, "No more reservations allowed for this trip");
+                return (false, 409, "No more reservations allowed for this trip.");
             }
         }
 
@@ -210,7 +218,7 @@ public class TripsService : ITripsService
             await cmd.ExecuteNonQueryAsync();
         }
 
-        return (true, 201, $"Client {clientId} registered for trip {tripId}");
+        return (true, 201, "");
     }
 
 
@@ -236,6 +244,6 @@ public class TripsService : ITripsService
             await deleteCmd.ExecuteNonQueryAsync();
         }
 
-        return (true, 204, $"Unregistered client {clientId} from trip {tripId}");
+        return (true, 204, "");
     }
 }
