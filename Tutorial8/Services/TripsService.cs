@@ -1,131 +1,106 @@
-﻿
-using Microsoft.Data.SqlClient;
-using Tutorial8.Models.DTOs;
+﻿using Microsoft.Data.SqlClient;
+using Tutorial8.Models;
 
 namespace Tutorial8.Services;
 
 public class TripsService : ITripsService
 {
-    private const string ConnectionString = "Data Source=localhost, 1433; User=sa; Password=yourStrong(!)Password; Integrated Security=False;Connect Timeout=30;Encrypt=False;Trust Server Certificate=False";
+    private readonly string _connectionString;
 
-    public async Task<List<TripDto>> GetTrips()
+    public TripsService(IConfiguration configuration)
     {
-        await using var conn = new SqlConnection(ConnectionString);
-        await conn.OpenAsync();
-        
-        // Get all trips
-        await using var tripCmd = new SqlCommand("SELECT IdTrip, Name, Description, DateFrom, DateTo, MaxPeople FROM Trip", conn);
-        await using var tReader = await tripCmd.ExecuteReaderAsync();
-        var result = new Dictionary<int, TripDto>();
-        while (await tReader.ReadAsync())
-        {
-            var trip = new TripDto
-            {
-                Id = tReader.GetInt32(0),
-                Name = tReader.GetString(1),
-                Description = tReader.IsDBNull(2) ? null : tReader.GetString(2),
-                DateFrom = tReader.GetDateTime(3),
-                DateTo = tReader.GetDateTime(4),
-                MaxPeople = tReader.GetInt32(5),
-                Countries = []
-            };
-            result[trip.Id] = trip;
-        }
-        tReader.Close();
-
-        // Get matching countries
-        await using var countryCmd = new SqlCommand("SELECT ct.IdTrip, c.Name FROM Country_Trip ct JOIN Country c ON ct.IdCountry = c.IdCountry", conn);
-        await using var cReader = await countryCmd.ExecuteReaderAsync();
-        while (await cReader.ReadAsync())
-        {
-            var tripId = cReader.GetInt32(0);
-            var countryName = cReader.GetString(1);
-            if (result.TryGetValue(tripId, out var trip))
-            {
-                trip.Countries.Add(new CountryDto { Name = countryName });
-            }
-        }
-
-        return result.Values.ToList();
+        _connectionString = configuration.GetConnectionString("Default") ??
+                            throw new InvalidOperationException("Connection string configuration missing.");
     }
-    
-    public async Task<List<TripDto>?> GetTripsForClient(int clientId)
+
+
+    public async Task<IEnumerable<TripDto>> GetTripsWithDetails()
     {
-        const string selectTripsQuery = """
-                                            SELECT t.IdTrip, t.Name, t.Description, t.DateFrom, t.DateTo, t.MaxPeople, ct.RegisteredAt, ct.PaymentDate
-                                            FROM Client_Trip ct
-                                            JOIN Trip t ON ct.IdTrip = t.IdTrip
-                                            WHERE ct.IdClient = @IdClient
-                                            """;
+        const string sql = """
+                           SELECT t.IdTrip, t.Name, t.Description, t.DateFrom, t.DateTo, t.MaxPeople, c.IdCountry, c.Name AS CountryName
+                           FROM Trip t
+                           LEFT JOIN Country_Trip ct ON t.IdTrip = ct.IdTrip
+                           LEFT JOIN Country c ON ct.IdCountry = c.IdCountry
+                           """;
 
-        const string selectCountriesQuery = """
-                                      SELECT ct.IdTrip, c.Name
-                                      FROM Country_Trip ct
-                                      JOIN Country c ON ct.IdCountry = c.IdCountry
-                                      WHERE ct.IdTrip IN (
-                                            SELECT IdTrip FROM Client_Trip WHERE IdClient = @IdClient
-                                      )
-                                      """;
-
-        await using var conn = new SqlConnection(ConnectionString);
+        await using var conn = new SqlConnection(_connectionString);
+        await using var cmd = new SqlCommand(sql, conn);
         await conn.OpenAsync();
 
-        // Check if client exists
-        await using (var checkCmd = new SqlCommand("SELECT 1 FROM Client WHERE IdClient = @IdClient", conn))
-        {
-            checkCmd.Parameters.AddWithValue("@IdClient", clientId);
-            var exists = await checkCmd.ExecuteScalarAsync();
-            if (exists == null)
-                return null;
-        }
-
-        // Get trips for thee client
+        // get all trips
         var result = new Dictionary<int, TripDto>();
-        await using (var tripCmd = new SqlCommand(selectTripsQuery, conn))
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
         {
-            tripCmd.Parameters.AddWithValue("@IdClient", clientId);
-            await using var reader = await tripCmd.ExecuteReaderAsync();
-            while (await reader.ReadAsync())
+            var tripId = reader.GetInt32(0);
+            if (!result.TryGetValue(tripId, out var trip))
             {
-                var trip = new TripDto
+                trip = new TripDto
                 {
-                    Id = reader.GetInt32(0),
+                    Id = tripId,
                     Name = reader.GetString(1),
-                    Description = reader.IsDBNull(2) ? null : reader.GetString(2),
+                    Description = reader.GetString(2),
                     DateFrom = reader.GetDateTime(3),
                     DateTo = reader.GetDateTime(4),
                     MaxPeople = reader.GetInt32(5),
                     Countries = []
                 };
-                result[trip.Id] = trip;
+                result[tripId] = trip;
             }
+
+            // add matching country names
+            trip.Countries.Add(new CountryDto { Name = reader.GetString(7) });
         }
 
-        // Get countries for the trips
-        await using (var countryCmd = new SqlCommand(selectCountriesQuery, conn))
+        return result.Values;
+    }
+
+    public async Task<IEnumerable<ClientTripDto>?> GetTripsForClient(int clientId)
+    {
+        // check if exists
+        
+        const string sql = """
+                           SELECT t.IdTrip, t.Name, t.Description, t.DateFrom, t.DateTo, t.MaxPeople, ct.RegisteredAt, ct.PaymentDate
+                           FROM Client_Trip ct
+                           INNER JOIN Trip t ON ct.IdTrip = t.IdTrip
+                           WHERE ct.IdClient = @clientId
+                           """;
+        
+        await using var conn = new SqlConnection(_connectionString);
+        await using var cmd = new SqlCommand(sql, conn);
+        cmd.Parameters.AddWithValue("@clientId", clientId);
+        await conn.OpenAsync();
+
+        // get all trips for the client
+        var result = new List<ClientTripDto>();
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
         {
-            countryCmd.Parameters.AddWithValue("@IdClient", clientId);
-            await using var countryReader = await countryCmd.ExecuteReaderAsync();
-            while (await countryReader.ReadAsync())
+            result.Add(new ClientTripDto
             {
-                var tripId = countryReader.GetInt32(0);
-                var countryName = countryReader.GetString(1);
-                if (result.TryGetValue(tripId, out var trip))
-                    trip.Countries.Add(new CountryDto { Name = countryName });
-            }
+                IdTrip = reader.GetInt32(0),
+                Name = reader.GetString(1),
+                Description = reader.GetString(2),
+                DateFrom = reader.GetDateTime(3),
+                DateTo = reader.GetDateTime(4),
+                MaxPeople = reader.GetInt32(5),
+                RegisteredAt = reader.GetInt32(6),
+                PaymentDate = reader.IsDBNull(7) ? null : reader.GetInt32(7)
+            });
         }
-        return result.Values.ToList();
+
+        return result;
     }
 
     public async Task<int> CreateClient(ClientDto clientDto)
     {
         const string insertClientQuery = """
-                                    INSERT INTO Client (FirstName, LastName, Email, Telephone, Pesel)
-                                    OUTPUT INSERTED.IdClient
-                                    VALUES (@FirstName, @LastName, @Email, @Telephone, @Pesel)
-                                    """;
+                                         INSERT INTO Client (FirstName, LastName, Email, Telephone, Pesel)
+                                         OUTPUT INSERTED.IdClient
+                                         VALUES (@FirstName, @LastName, @Email, @Telephone, @Pesel)
+                                         """;
 
-        await using var conn = new SqlConnection(ConnectionString);
+        await using var conn = new SqlConnection(_connectionString);
         await conn.OpenAsync();
 
         // Check if email already exists
@@ -137,12 +112,21 @@ public class TripsService : ITripsService
                 throw new Exception("Client with this email already exists.");
         }
         
+        // Check if pesel already exists
+        await using (var checkCmd = new SqlCommand("SELECT 1 FROM Client WHERE Pesel = @Pesel", conn))
+        {
+            checkCmd.Parameters.AddWithValue("@Pesel", clientDto.Email);
+            var exists = await checkCmd.ExecuteScalarAsync();
+            if (exists != null)
+                throw new Exception("Client with this pesel already exists.");
+        }
+
         // Validate email
         if (!clientDto.Email.Contains('@'))
         {
             throw new Exception("Invalid email format.");
         }
-        
+
         // Validate pesel
         if (string.IsNullOrEmpty(clientDto.Pesel) || clientDto.Pesel.Length != 11 || !clientDto.Pesel.All(char.IsDigit))
         {
@@ -158,7 +142,7 @@ public class TripsService : ITripsService
             insertCmd.Parameters.AddWithValue("@Telephone", (object?)clientDto.Telephone ?? DBNull.Value);
             insertCmd.Parameters.AddWithValue("@Pesel", (object?)clientDto.Pesel ?? DBNull.Value);
 
-            var newId = (int) (await insertCmd.ExecuteScalarAsync() ?? throw new InvalidOperationException());
+            var newId = (int)(await insertCmd.ExecuteScalarAsync() ?? throw new InvalidOperationException());
             return newId;
         }
     }
@@ -166,7 +150,7 @@ public class TripsService : ITripsService
 
     public async Task<(bool Success, int StatusCode, string Message)> RegisterClientForTrip(int clientId, int tripId)
     {
-        await using var conn = new SqlConnection(ConnectionString);
+        await using var conn = new SqlConnection(_connectionString);
         await conn.OpenAsync();
 
         // Check if client exists
@@ -195,7 +179,8 @@ public class TripsService : ITripsService
         }
 
         // Check if client already registered for this trip
-        await using (var cmd = new SqlCommand("SELECT 1 FROM Client_Trip WHERE IdClient = @ClientId AND IdTrip = @TripId", conn))
+        await using (var cmd = new SqlCommand(
+                         "SELECT 1 FROM Client_Trip WHERE IdClient = @ClientId AND IdTrip = @TripId", conn))
         {
             cmd.Parameters.AddWithValue("@ClientId", clientId);
             cmd.Parameters.AddWithValue("@TripId", tripId);
@@ -207,14 +192,14 @@ public class TripsService : ITripsService
         await using (var cmd = new SqlCommand("SELECT COUNT(*) FROM Client_Trip WHERE IdTrip = @TripId", conn))
         {
             cmd.Parameters.AddWithValue("@TripId", tripId);
-            var count = (int) (await cmd.ExecuteScalarAsync() ?? maxPeople);
-            
-            if (count >= maxPeople) 
+            var count = (int)(await cmd.ExecuteScalarAsync() ?? maxPeople);
+
+            if (count >= maxPeople)
             {
                 return (false, 409, "No more reservations allowed for this trip");
             }
         }
-        
+
         // Register client for the trip
         var nowInt = int.Parse(DateTime.Now.ToString("yyyyMMdd"));
         await using (var cmd = new SqlCommand("INSERT INTO Client_Trip (IdClient, IdTrip, RegisteredAt) VALUES (@ClientId, @TripId, @RegisteredAt)", conn))
@@ -231,10 +216,10 @@ public class TripsService : ITripsService
 
     public async Task<(bool Success, int StatusCode, string Message)> UnregisterClientFromTrip(int clientId, int tripId)
     {
-        await using var conn = new SqlConnection(ConnectionString);
+        await using var conn = new SqlConnection(_connectionString);
         await conn.OpenAsync();
 
-        // Check if client registered for this trip
+        // Check if client already registered for this trip
         await using (var checkCmd = new SqlCommand("SELECT 1 FROM Client_Trip WHERE IdClient = @ClientId AND IdTrip = @TripId", conn))
         {
             checkCmd.Parameters.AddWithValue("@ClientId", clientId);
